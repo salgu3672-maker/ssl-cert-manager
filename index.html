@@ -1484,48 +1484,80 @@ function deleteRow() {
 // ── GitHub API로 ssl-data.json 자동 저장 ──────────
 async function saveToGitHub() {
   const token = document.getElementById('ghTokenInput')?.value?.trim();
-  if (!token) return; // 토큰 없으면 조용히 넘어감
+  if (!token) return;
 
-  const owner = 'salgu3672-maker';
-  const repo  = 'ssl-alert';
-  const path  = 'data/ssl-data.json';
-  const apiUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${path}`;
+  showToast('🔄 GitHub에 저장 중...', 'info');
 
   try {
-    showToast('🔄 GitHub에 저장 중...', 'info');
+    // 1. ssl-alert의 ssl-data.json 업데이트
+    await updateGitHubFile({
+      token,
+      owner: 'salgu3672-maker',
+      repo: 'ssl-alert',
+      path: 'data/ssl-data.json',
+      message: '사이트에서 SSL 데이터 업데이트',
+      content: JSON.stringify(allData.map(d => ({
+        name: d.대학명,
+        expiry: d.만료일,
+        manager: d.담당자,
+        email: getEmailByPerson(d.담당자),
+        hosting: d.호스팅,
+        vendor: d.업체명,
+        note: d.비고 || ''
+      })), null, 2)
+    });
 
-    // 현재 파일 SHA 가져오기 (업데이트에 필요)
-    const getRes = await fetch(apiUrl, {
+    // 2. ssl-cert-manager의 index.html 기본 데이터 업데이트
+    const indexApi = `https://api.github.com/repos/salgu3672-maker/ssl-cert-manager/contents/index.html`;
+    const getRes = await fetch(indexApi, {
       headers: { Authorization: `token ${token}`, Accept: 'application/vnd.github.v3+json' }
     });
-    if (!getRes.ok) throw new Error('파일 조회 실패');
+    if (!getRes.ok) throw new Error('index.html 조회 실패');
     const getJson = await getRes.json();
     const sha = getJson.sha;
 
-    // ssl-data.json 형식으로 변환
-    const jsonData = allData.map(d => ({
-      name: d.대학명,
-      expiry: d.만료일,
-      manager: d.담당자,
-      email: getEmailByPerson(d.담당자),
-      hosting: d.호스팅,
-      vendor: d.업체명,
-      note: d.비고 || ''
-    }));
+    // 현재 index.html 내용 디코딩
+    let htmlContent = decodeURIComponent(escape(atob(getJson.content.replace(/\n/g,''))));
 
-    const content = btoa(unescape(encodeURIComponent(JSON.stringify(jsonData, null, 2))));
+    // loadDefaultData 함수 안의 raw 배열 교체
+    const newRaw = allData.map(d =>
+      `    {NO:${d.NO},대학명:'${d.대학명}',만료일:'${d.만료일}',호스팅:'${d.호스팅}',업체명:'${d.업체명}',담당자:'${d.담당자}',비고:'${d.비고||''}'},`
+    ).join('\n');
 
-    const putRes = await fetch(apiUrl, {
+    htmlContent = htmlContent.replace(
+      /const raw = \[[\s\S]*?\];(\s*allData = raw)/,
+      `const raw = [\n${newRaw}\n  ];$1`
+    );
+
+    await fetch(indexApi, {
       method: 'PUT',
       headers: { Authorization: `token ${token}`, Accept: 'application/vnd.github.v3+json', 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message: '사이트에서 SSL 데이터 업데이트', content, sha })
+      body: JSON.stringify({
+        message: '사이트 기본 데이터 자동 업데이트',
+        content: btoa(unescape(encodeURIComponent(htmlContent))),
+        sha
+      })
     });
 
-    if (!putRes.ok) throw new Error('저장 실패');
-    showToast('✅ GitHub ssl-data.json 자동 저장 완료!', 'success');
+    showToast('✅ 저장 완료! 1~2분 후 사이트에 반영됩니다', 'success');
   } catch(err) {
-    showToast('⚠ GitHub 저장 실패: ' + err.message, 'error');
+    showToast('⚠ 저장 실패: ' + err.message, 'error');
   }
+}
+
+async function updateGitHubFile({ token, owner, repo, path, message, content }) {
+  const apiUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${path}`;
+  const getRes = await fetch(apiUrl, {
+    headers: { Authorization: `token ${token}`, Accept: 'application/vnd.github.v3+json' }
+  });
+  if (!getRes.ok) throw new Error(`${path} 조회 실패`);
+  const { sha } = await getRes.json();
+  const putRes = await fetch(apiUrl, {
+    method: 'PUT',
+    headers: { Authorization: `token ${token}`, Accept: 'application/vnd.github.v3+json', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message, content: btoa(unescape(encodeURIComponent(content))), sha })
+  });
+  if (!putRes.ok) throw new Error(`${path} 저장 실패`);
 }
 
 function getEmailByPerson(name) {
