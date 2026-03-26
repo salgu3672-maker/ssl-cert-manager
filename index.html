@@ -826,6 +826,23 @@ footer {
     </div>
   </div>
 
+  <!-- GITHUB 연동 -->
+  <div class="panel">
+    <div class="panel-title">🔗 GitHub 자동 저장 연동</div>
+    <div class="code-note">
+      💡 아래에 GitHub Personal Access Token을 입력하면 사이트에서 학교 정보를 편집할 때 <strong>ssl-alert 저장소의 ssl-data.json이 자동으로 업데이트</strong>됩니다.<br>
+      토큰은 이 브라우저에만 저장되며 외부로 전송되지 않습니다.
+    </div>
+    <div class="form-group" style="margin-top:1rem">
+      <label class="form-label">GitHub Personal Access Token</label>
+      <div style="display:flex;gap:8px;align-items:center">
+        <input class="form-input" id="ghTokenInput" type="password" placeholder="ghp_xxxxxxxxxxxxxxxxxxxx" style="flex:1;font-family:'JetBrains Mono',monospace;font-size:12px">
+        <button class="btn-primary" id="ghTokenSaveBtn">💾 저장</button>
+        <span id="ghTokenStatus" style="font-size:12px;color:var(--muted)"></span>
+      </div>
+    </div>
+  </div>
+
   <!-- SCHEDULER -->
   <div class="panel">
     <div class="panel-title">⚙️ 자동 발송 스케줄러 설정 가이드</div>
@@ -999,6 +1016,22 @@ document.addEventListener('DOMContentLoaded', () => {
 
   document.getElementById('searchInput').addEventListener('input', renderTable);
   document.getElementById('sortSelect').addEventListener('change', renderTable);
+
+  // GitHub 토큰 저장/불러오기
+  const savedToken = localStorage.getItem('gh_token');
+  if (savedToken) {
+    document.getElementById('ghTokenInput').value = savedToken;
+    document.getElementById('ghTokenStatus').textContent = '✅ 토큰 저장됨';
+    document.getElementById('ghTokenStatus').style.color = 'var(--ok)';
+  }
+  document.getElementById('ghTokenSaveBtn').addEventListener('click', () => {
+    const token = document.getElementById('ghTokenInput').value.trim();
+    if (!token) { showToast('⚠ 토큰을 입력해 주세요', 'error'); return; }
+    localStorage.setItem('gh_token', token);
+    document.getElementById('ghTokenStatus').textContent = '✅ 저장됨';
+    document.getElementById('ghTokenStatus').style.color = 'var(--ok)';
+    showToast('✅ 토큰이 저장되었습니다. 이제 편집 시 자동으로 GitHub에 반영됩니다!', 'success');
+  });
 
   // per-person preview & send
   document.querySelectorAll('.btn-person-preview').forEach(btn => {
@@ -1432,6 +1465,7 @@ function saveEdit() {
   closeEditModal();
   updateStats();
   renderTable();
+  saveToGitHub();
 }
 
 function deleteRow() {
@@ -1439,12 +1473,64 @@ function deleteRow() {
   const name = allData[idx].대학명;
   if (!confirm(`'${name}'을(를) 삭제하시겠습니까?`)) return;
   allData.splice(idx, 1);
-  // NO 재정렬
   allData.forEach((d,i) => d.NO = i+1);
   closeEditModal();
   updateStats();
   renderTable();
   showToast(`🗑 '${name}' 삭제 완료`, 'info');
+  saveToGitHub();
+}
+
+// ── GitHub API로 ssl-data.json 자동 저장 ──────────
+async function saveToGitHub() {
+  const token = document.getElementById('ghTokenInput')?.value?.trim();
+  if (!token) return; // 토큰 없으면 조용히 넘어감
+
+  const owner = 'salgu3672-maker';
+  const repo  = 'ssl-alert';
+  const path  = 'data/ssl-data.json';
+  const apiUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${path}`;
+
+  try {
+    showToast('🔄 GitHub에 저장 중...', 'info');
+
+    // 현재 파일 SHA 가져오기 (업데이트에 필요)
+    const getRes = await fetch(apiUrl, {
+      headers: { Authorization: `token ${token}`, Accept: 'application/vnd.github.v3+json' }
+    });
+    if (!getRes.ok) throw new Error('파일 조회 실패');
+    const getJson = await getRes.json();
+    const sha = getJson.sha;
+
+    // ssl-data.json 형식으로 변환
+    const jsonData = allData.map(d => ({
+      name: d.대학명,
+      expiry: d.만료일,
+      manager: d.담당자,
+      email: getEmailByPerson(d.담당자),
+      hosting: d.호스팅,
+      vendor: d.업체명,
+      note: d.비고 || ''
+    }));
+
+    const content = btoa(unescape(encodeURIComponent(JSON.stringify(jsonData, null, 2))));
+
+    const putRes = await fetch(apiUrl, {
+      method: 'PUT',
+      headers: { Authorization: `token ${token}`, Accept: 'application/vnd.github.v3+json', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: '사이트에서 SSL 데이터 업데이트', content, sha })
+    });
+
+    if (!putRes.ok) throw new Error('저장 실패');
+    showToast('✅ GitHub ssl-data.json 자동 저장 완료!', 'success');
+  } catch(err) {
+    showToast('⚠ GitHub 저장 실패: ' + err.message, 'error');
+  }
+}
+
+function getEmailByPerson(name) {
+  const map = { '김지선': 'salguoo@jinhak.com', '권현지': 'kradio19@jinhak.com', '이모레': 'mrlee@jinhak.com' };
+  return map[name] || '';
 }
 
 function showToast(msg, type='info') {
